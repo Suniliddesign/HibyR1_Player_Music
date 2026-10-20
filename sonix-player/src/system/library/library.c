@@ -1,6 +1,8 @@
 #include "library.h"
 
 #include "src/system/library/audiobookdb.h"
+#include "src/system/library/geniusbuild.h"
+#include "src/system/library/geniusdb.h"
 #include "src/system/playback/playlist.h"
 #include "src/system/streaming/podcastdl.h"
 
@@ -195,6 +197,7 @@ static const char *const SCHEMA_COLUMNS[] = {
 	"ALTER TABLE PLAYLIST_COUNTS ADD COLUMN mount INT",
 	"ALTER TABLE PLAYBACK_QUEUE ADD COLUMN slot INT",
 	"ALTER TABLE CUE_STATE ADD COLUMN version INT",
+	"ALTER TABLE PLAYBACK_QUEUE_STATE ADD COLUMN ordered INT DEFAULT 0",
 };
 
 // After the columns exist, never before: an index on a column the table does
@@ -305,6 +308,7 @@ static const char *const SORT_INDEXES[] = {
 
 static sqlite3 *db;
 static pthread_mutex_t db_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t session_generation;
 
 // Bumped whenever a row's identity can have changed underneath a list that is
 // already open.
@@ -375,19 +379,22 @@ unsigned library_revision(library_list_t kind) {
 }
 
 static pthread_t scan_thread;
-static volatile bool scan_running;
-static volatile bool scan_cancel;
+static atomic_bool scan_running;
+static atomic_bool scan_cancel;
 // Set when the database itself stops answering -- a failed prepare, a
 // transaction that will not commit. The walk stops on scan_cancel, and this
 // says the stop was a fault rather than the user pressing back.
-static volatile bool scan_db_failed;
+static atomic_bool scan_db_failed;
 // The user asked the scan to stop, as opposed to the scan stopping itself on a
 // database fault.
-static volatile bool scan_stop_asked;
-static volatile int scan_found;
+static atomic_bool scan_stop_asked;
+static atomic_int scan_found;
 static char scan_root[512];
 static char scan_folder[512];
 static pthread_mutex_t scan_folder_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t progress_lock = PTHREAD_MUTEX_INITIALIZER;
+static library_scan_progress_t scan_progress;
+static uint32_t phase_started;
 
 // Whether every file is named in the log as it is read. Developer options has
 // the switch; see library_set_log_database.
@@ -401,8 +408,9 @@ typedef enum {
 	SCAN_FULL,
 	SCAN_UPDATE,
 	SCAN_REORGANIZE,
+	SCAN_GENIUS,
 } scan_mode_t;
-static volatile scan_mode_t scan_mode;
+static _Atomic(scan_mode_t) scan_mode;
 
 // Settings changed while the scan thread was busy: it files the index again
 // under `pending_rules` before it finishes.
@@ -1078,6 +1086,26 @@ static uint32_t now_ms(void) {
 	return (uint32_t)(now.tv_sec * 1000u) + (uint32_t)(now.tv_nsec / 1000000);
 }
 
+static void scan_phase(library_scan_phase_t phase, int completed, int total) {
+	pthread_mutex_lock(&progress_lock);
+	if (scan_progress.phase != phase) {
+		scan_progress.phase = phase;
+		scan_progress.serial++;
+		phase_started = now_ms();
+	}
+	scan_progress.completed = completed;
+	scan_progress.total = total;
+	pthread_mutex_unlock(&progress_lock);
+}
+
+void library_scan_progress(library_scan_progress_t *out) {
+	if (!out) return;
+	pthread_mutex_lock(&progress_lock);
+	*out = scan_progress;
+	out->elapsed_ms = now_ms() - phase_started;
+	pthread_mutex_unlock(&progress_lock);
+}
+
 // See the call site. Points SQLite's scratch files at the folder the database
 // lives in. Held in a static because sqlite3_temp_directory is a bare pointer
 // SQLite keeps and never copies.
@@ -1399,18 +1427,23 @@ static bool db_open_file(const char *db_path) {
 
 	album_groups_fill();
 	album_keys_fill();
+	if (++session_generation == 0) {
+		session_generation++;
+	}
 	return true;
 }
 
 bool library_open(const char *db_path) {
+	pthread_mutex_lock(&db_lock);
 	if (db) {
+		pthread_mutex_unlock(&db_lock);
 		return true;
 	}
 	if (!db_path || !db_path[0] || !db_open_file(db_path)) {
+		pthread_mutex_unlock(&db_lock);
 		return false;
 	}
 
-	pthread_mutex_lock(&db_lock);
 	links_check();
 	bump_all_generations(); // a different card is a different set of row ids
 	pthread_mutex_unlock(&db_lock);
@@ -1626,6 +1659,59 @@ int library_track_count(void) {
 	int count = count_rows("SELECT COUNT(*) FROM MEDIA_TABLE");
 	pthread_mutex_unlock(&db_lock);
 	return count;
+}
+
+static int tags_cancelled(void *user) {
+	const atomic_bool *cancel = user;
+	return cancel && atomic_load(cancel);
+}
+
+bool library_read_tags(library_tags_cb cb, void *user, const atomic_bool *cancel, unsigned *revision) {
+	if (!cb || !revision) return false;
+	pthread_mutex_lock(&db_lock);
+	sqlite3_stmt *stmt = NULL;
+	bool ok = false;
+	if (!db || tags_cancelled((void *)cancel)) goto done;
+	*revision = generation[GEN_MEDIA];
+	sqlite3_progress_handler(db, 1024, tags_cancelled, (void *)cancel);
+	// No title collation, no browse grouping, no truncation, no private handle.
+	// A rowid walk avoids an unbounded SQL sort on a large preexisting index.
+	// octet_length reads SQLite's stored byte length without fetching a huge
+	// tag value. Deliver its length but no payload when over the builder bound,
+	// so it can report LIMIT before SQLite materializes the text on the heap.
+	if (sqlite3_prepare_v2(db,
+		"SELECT CASE WHEN octet_length(path)<=?2 THEN path END,octet_length(path),"
+		" CASE WHEN octet_length(artist)<=?2 THEN artist END,octet_length(artist),"
+		" CASE WHEN octet_length(album)<=?2 THEN album END,octet_length(album),"
+		" CASE WHEN octet_length(genre)<=?2 THEN genre END,octet_length(genre),"
+		" typeof(year),CASE WHEN typeof(year)='integer' THEN year END FROM MEDIA_TABLE"
+		" ORDER BY rowid LIMIT ?1", -1, &stmt, NULL) != SQLITE_OK ||
+		sqlite3_bind_int(stmt, 1, GENIUSBUILD_MAX_TRACKS + 1) != SQLITE_OK ||
+		sqlite3_bind_int(stmt, 2, GENIUSBUILD_MAX_FIELD_BYTES) != SQLITE_OK) goto done;
+	int rc;
+	while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+		if (tags_cancelled((void *)cancel)) goto done;
+		library_tags_t tags = {0};
+		const char **texts[] = {&tags.path, &tags.artist, &tags.album, &tags.genre};
+		size_t *lengths[] = {&tags.path_bytes, &tags.artist_bytes, &tags.album_bytes, &tags.genre_bytes};
+		for (int i = 0; i < 4; i++) {
+			const char *text = (const char *)sqlite3_column_text(stmt, i * 2);
+			*texts[i] = text ? text : "";
+			*lengths[i] = (size_t)sqlite3_column_int64(stmt, i * 2 + 1);
+			if (*lengths[i] <= GENIUSBUILD_MAX_FIELD_BYTES &&
+				((!text && *lengths[i]) || memchr(*texts[i], 0, *lengths[i]))) goto done;
+		}
+		const char *type = (const char *)sqlite3_column_text(stmt, 8);
+		if (!type || (strcmp(type, "null") && strcmp(type, "integer"))) goto done;
+		tags.year = sqlite3_column_int64(stmt, 9);
+		if (!cb(&tags, user)) goto done;
+	}
+	ok = rc == SQLITE_DONE;
+done:
+	sqlite3_finalize(stmt);
+	if (db) sqlite3_progress_handler(db, 0, NULL, NULL);
+	pthread_mutex_unlock(&db_lock);
+	return ok;
 }
 
 int library_list(library_list_t kind, char out[][256], int max) {
@@ -2305,6 +2391,35 @@ bool library_history_entry(long long id, char *path, size_t path_size, char *nam
 	}
 	pthread_mutex_unlock(&db_lock);
 	return found;
+}
+
+// Prepared once by library_get_indexed and released by finalize_statements.
+static sqlite3_stmt *stmt_indexed;
+
+bool library_get_indexed(const char *path, bool *indexed) {
+	if (!indexed) {
+		return false;
+	}
+	*indexed = false;
+	if (!path || !path[0]) {
+		return false;
+	}
+	pthread_mutex_lock(&db_lock);
+	bool ok = false;
+	// One prepare for the whole run: a mix asks for this once per track, and
+	// preparing the lookup each time costs more than running it.
+	if (db && (stmt_indexed || sqlite3_prepare_v2(db, "SELECT 1 FROM MEDIA_TABLE WHERE path=?1 LIMIT 1", -1, &stmt_indexed, NULL) == SQLITE_OK)) {
+		sqlite3_reset(stmt_indexed);
+		int result = sqlite3_bind_text(stmt_indexed, 1, path, -1, SQLITE_TRANSIENT) == SQLITE_OK ? sqlite3_step(stmt_indexed) : SQLITE_ERROR;
+		ok = result == SQLITE_ROW || result == SQLITE_DONE;
+		if (result == SQLITE_ROW) {
+			*indexed = true;
+		}
+		// Reset releases the statement's read lock; it stays prepared.
+		sqlite3_reset(stmt_indexed);
+	}
+	pthread_mutex_unlock(&db_lock);
+	return ok;
 }
 
 int library_fav_add_many(const library_fav_row_t *rows, int count) {
@@ -4085,8 +4200,10 @@ static void finalize_statements(void) {
 	sqlite3_finalize(stmt_artist_link);
 	sqlite3_finalize(stmt_album_artist_link);
 	sqlite3_finalize(stmt_genre_link);
+	sqlite3_finalize(stmt_indexed);
 	stmt_track = stmt_album = stmt_artist = stmt_genre = stmt_album_artist = stmt_album_group = NULL;
 	stmt_artist_link = stmt_album_artist_link = stmt_genre_link = NULL;
+	stmt_indexed = NULL;
 }
 
 static bool prepare_statements(void) {
@@ -5113,6 +5230,7 @@ static void prune_names(void);
 
 // A scan: the tables emptied, the card walked, every file read.
 static void full_scan_run(void) {
+	scan_phase(LIBRARY_PHASE_READING, 0, 0);
 	if (scan_folder_count > 0) {
 		printf("library: scanning %s, %d chosen folder(s)\n", scan_root, scan_folder_count);
 	} else {
@@ -6322,6 +6440,7 @@ static void update_run(void) {
 	bool reading = false;
 	int folders_noted = 0;
 	while (!scan_cancel) {
+		scan_phase(LIBRARY_PHASE_CHECKING, 0, 0);
 		walk_t walk;
 		walk_init(&walk);
 		update_folder(scan_root, 0, &walk);
@@ -6343,6 +6462,7 @@ static void update_run(void) {
 		}
 
 		if (walk_pending(&walk) > 0 && !scan_cancel) {
+			scan_phase(LIBRARY_PHASE_READING, 0, 0);
 			printf("library: %d new file(s) and %d changed one(s) to read\n", walk.found.count, walk.reread.count);
 			if (!reading && update_listener) {
 				update_listener(LIBRARY_UPDATE_ADDING, walk.found.count, 0, walk.reread.count);
@@ -6497,6 +6617,7 @@ static void relink(const char *column, const char *link_table, sqlite3_stmt **lo
 // lists partly rebuilt and the settings not recorded, so organized_as_set()
 // asks for it again.
 static bool reorganize_run(void) {
+	scan_phase(LIBRARY_PHASE_REORGANIZING, 0, 0);
 	uint32_t started_ms = now_ms();
 	pthread_mutex_lock(&db_lock);
 	bool ready = db && prepare_statements() && exec("BEGIN");
@@ -6543,6 +6664,47 @@ static bool reorganize_run(void) {
 	return done;
 }
 
+static void genius_progress(geniusbuild_phase_t phase, int completed, int total, void *user) {
+	(void)user;
+	library_scan_phase_t next = phase == GENIUSBUILD_CHECKING ? LIBRARY_PHASE_GENIUS_CHECKING :
+		phase == GENIUSBUILD_RANKING ? LIBRARY_PHASE_GENIUS_BUILDING : LIBRARY_PHASE_GENIUS_PUBLISHING;
+	scan_phase(next, completed, total);
+	if (phase == GENIUSBUILD_PUBLISHED) {
+		pthread_mutex_lock(&progress_lock);
+		scan_progress.genius_published = true;
+		pthread_mutex_unlock(&progress_lock);
+	}
+}
+
+static void genius_build_run(void) {
+	// Unlike thread_be_low_priority(), this also leaves an inherited SCHED_IDLE
+	// policy. A full scan starts there; graph ranking must progress with music on.
+	thread_set_background_level(true);
+	printf("library: Smart Mix phase at SCHED_OTHER / nice 10 (thread_set_background_level(true))\n");
+	if (update_listener) update_listener(LIBRARY_UPDATE_GENIUS, 0, 0, 0);
+	char path[sizeof(db_file) + 16];
+	pthread_mutex_lock(&db_lock);
+	const char *slash = strrchr(db_file, '/');
+	int length = slash ? (int)(slash - db_file) : 1;
+	snprintf(path, sizeof(path), "%.*s/genius.db", length, slash ? db_file : ".");
+	pthread_mutex_unlock(&db_lock);
+	geniusbuild_result_t result = geniusbuild_run(path, &scan_cancel, genius_progress, NULL);
+	if (result == GENIUSBUILD_OK) {
+		// Retire the mounted cache only after rename. Outstanding mix snapshots
+		// keep their borrowed memory until release, following the existing API.
+		geniusdb_close();
+		if (!scan_cancel) geniusdb_open(path);
+	} else if (result == GENIUSBUILD_CURRENT && !scan_cancel && !geniusdb_available()) {
+		geniusdb_open(path);
+	}
+	if (result != GENIUSBUILD_OK && result != GENIUSBUILD_CURRENT && result != GENIUSBUILD_CANCELLED) {
+		pthread_mutex_lock(&progress_lock);
+		scan_progress.genius_failed = true;
+		pthread_mutex_unlock(&progress_lock);
+		fprintf(stderr, "library: Smart Mix build failed (%d); library scan outcome is unchanged\n", result);
+	}
+}
+
 static void *scan_thread_func(void *arg) {
 	(void)arg;
 
@@ -6581,6 +6743,7 @@ static void *scan_thread_func(void *arg) {
 		}
 		break;
 	case SCAN_REORGANIZE:
+	case SCAN_GENIUS:
 		break;
 	}
 
@@ -6594,6 +6757,7 @@ static void *scan_thread_func(void *arg) {
 	// thread gone and starts its own.
 	bool attempted = false;
 	bool done = false;
+	bool genius_attempted = false;
 	for (;;) {
 		pthread_mutex_lock(&rules_lock);
 		bool wanted = reorganize_pending || (scan_mode == SCAN_REORGANIZE && !attempted);
@@ -6605,6 +6769,12 @@ static void *scan_thread_func(void *arg) {
 			reorganize_pending = false;
 		}
 		if (!again) {
+			if (!wanted && (!attempted || done) && !genius_attempted && !scan_cancel && !scan_db_failed) {
+				genius_attempted = true;
+				pthread_mutex_unlock(&rules_lock);
+				genius_build_run();
+				continue; // drain settings handed over during ranking as well
+			}
 			// The notice that went up for it comes down either way.
 			if ((wanted || attempted) && update_listener) {
 				update_listener(done && !wanted ? LIBRARY_UPDATE_REORGANIZED : LIBRARY_UPDATE_STOPPED, 0, 0, 0);
@@ -6614,6 +6784,7 @@ static void *scan_thread_func(void *arg) {
 			if (scan_mode == SCAN_UPDATE && update_listener) {
 				update_listener(update_outcome, update_added, update_removed, update_replaced);
 			}
+			scan_phase(LIBRARY_PHASE_DONE, 0, 0);
 			scan_running = false;
 			pthread_mutex_unlock(&rules_lock);
 			break;
@@ -6626,7 +6797,7 @@ static void *scan_thread_func(void *arg) {
 }
 
 static bool scan_launch(const char *root, scan_mode_t mode) {
-	if (!db || scan_running || ((!root || !root[0]) && mode != SCAN_REORGANIZE)) {
+	if (!db || scan_running || ((!root || !root[0]) && mode != SCAN_REORGANIZE && mode != SCAN_GENIUS)) {
 		return false;
 	}
 
@@ -6641,8 +6812,13 @@ static bool scan_launch(const char *root, scan_mode_t mode) {
 	scan_cancel = false;
 	scan_stop_asked = false;
 	scan_db_failed = false;
+	pthread_mutex_lock(&progress_lock);
+	unsigned serial = scan_progress.serial + 1;
+	scan_progress = (library_scan_progress_t){.serial = serial};
+	phase_started = now_ms();
+	pthread_mutex_unlock(&progress_lock);
 	scan_running = true;
-	set_scan_folder(mode == SCAN_REORGANIZE ? "" : root);
+	set_scan_folder(mode == SCAN_REORGANIZE || mode == SCAN_GENIUS ? "" : root);
 
 	// Off by default: a line per file is a write to the card per file, which
 	// slows the scan and wears the card. It is turned on to catch a death that
@@ -6740,7 +6916,10 @@ bool library_card_returned(const char *root) {
 	// changes.
 	bool unfiled = !organized_as_set();
 	if (!library_detect_changes()) {
-		return unfiled && library_organize_check();
+		if (unfiled) return library_organize_check();
+		// An already-scanned library can acquire or refresh Smart Mix with no
+		// card walk, including when automatic change detection is disabled.
+		return library_track_count() > 0 && scan_launch(root, SCAN_GENIUS);
 	}
 	if (library_track_count() == 0) {
 		printf("library: detect changes: nothing indexed yet, a scan builds the library\n");
@@ -6788,6 +6967,13 @@ bool library_is_open(void) {
 	return open;
 }
 
+uint64_t library_session(void) {
+	pthread_mutex_lock(&db_lock);
+	uint64_t session = db ? session_generation : 0;
+	pthread_mutex_unlock(&db_lock);
+	return session;
+}
+
 bool library_scan_running(void) { return scan_running; }
 
 int library_scan_found(void) { return scan_found; }
@@ -6811,8 +6997,8 @@ void library_scan_stop(void) {
 
 // The same, but it does not return until the scan thread has actually let go.
 // The thread tests the flag once per directory entry, so this is a handful of
-// milliseconds in practice; the ceiling is there so a wedged card reader can
-// never hold the interface hostage.
+// milliseconds in practice. After four seconds, log the wait, but keep waiting:
+// closing or unmounting with a staging writer still alive is not safe.
 static void library_scan_stop_and_wait(void) {
 	if (!scan_running) {
 		return;
@@ -6824,7 +7010,8 @@ static void library_scan_stop_and_wait(void) {
 		usleep(10 * 1000);
 	}
 	if (scan_running) {
-		fprintf(stderr, "library: the scan did not stop in time; closing anyway\n");
+		fprintf(stderr, "library: waiting for scan/Smart Mix I/O before closing the card\n");
+		while (scan_running) usleep(10 * 1000);
 	}
 }
 
@@ -7066,14 +7253,18 @@ void library_playlist_names_free(char **names, int count) {
 	free(names);
 }
 
-bool library_playlist_create(const char *name) {
+static bool playlist_session_writable_locked(uint64_t session) {
+	return db && session && session == session_generation && sqlite3_db_readonly(db, "main") == 0;
+}
+
+bool library_playlist_create(const char *name, uint64_t session) {
 	char quoted[PLAYLIST_TABLE_MAX];
 	if (!playlist_table(name, quoted, sizeof(quoted))) {
 		return false;
 	}
 	pthread_mutex_lock(&db_lock);
 	bool ok = false;
-	if (db && !playlist_table_exists_locked(name)) {
+	if (playlist_session_writable_locked(session) && !playlist_table_exists_locked(name)) {
 		ok = playlist_create_locked(quoted);
 	}
 	if (ok) {
@@ -7083,14 +7274,14 @@ bool library_playlist_create(const char *name) {
 	return ok;
 }
 
-bool library_playlist_drop(const char *name) {
+bool library_playlist_drop(const char *name, uint64_t session) {
 	char quoted[PLAYLIST_TABLE_MAX];
 	if (!playlist_table(name, quoted, sizeof(quoted))) {
 		return false;
 	}
 	pthread_mutex_lock(&db_lock);
 	bool ok = false;
-	if (db && playlist_table_exists_locked(name)) {
+	if (playlist_session_writable_locked(session) && playlist_table_exists_locked(name)) {
 		char sql[PLAYLIST_TABLE_MAX + 32];
 		snprintf(sql, sizeof(sql), "DROP TABLE %s", quoted);
 		ok = exec(sql);
@@ -7102,17 +7293,19 @@ bool library_playlist_drop(const char *name) {
 	return ok;
 }
 
-bool library_playlist_rename(const char *name, const char *new_name) {
+bool library_playlist_rename(const char *name, const char *new_name, uint64_t session) {
 	char from[PLAYLIST_TABLE_MAX], to[PLAYLIST_TABLE_MAX];
 	if (!playlist_table(name, from, sizeof(from)) || !playlist_table(new_name, to, sizeof(to))) {
 		return false;
 	}
-	if (strcmp(name, new_name) == 0) {
-		return true;
-	}
 	pthread_mutex_lock(&db_lock);
 	bool ok = false;
-	if (db && playlist_table_exists_locked(name) && !playlist_table_exists_locked(new_name)) {
+	if (playlist_session_writable_locked(session) && strcmp(name, new_name) == 0) {
+		pthread_mutex_unlock(&db_lock);
+		return true;
+	}
+	if (playlist_session_writable_locked(session) && playlist_table_exists_locked(name) &&
+		!playlist_table_exists_locked(new_name)) {
 		char sql[2 * PLAYLIST_TABLE_MAX + 32];
 		snprintf(sql, sizeof(sql), "ALTER TABLE %s RENAME TO %s", from, to);
 		ok = exec(sql);
@@ -7143,13 +7336,14 @@ static bool playlist_append_locked(const char *quoted, const library_playlist_ro
 	return ok;
 }
 
-bool library_playlist_append(const char *name, const library_playlist_row_t *row) {
+bool library_playlist_append(const char *name, const library_playlist_row_t *row, uint64_t session) {
 	char quoted[PLAYLIST_TABLE_MAX];
 	if (!row || !playlist_table(name, quoted, sizeof(quoted))) {
 		return false;
 	}
 	pthread_mutex_lock(&db_lock);
-	bool ok = db && playlist_create_locked(quoted) && playlist_append_locked(quoted, row);
+	bool ok = playlist_session_writable_locked(session) && playlist_create_locked(quoted) &&
+			  playlist_append_locked(quoted, row);
 	if (ok) {
 		bump_generation(GEN_PLAYLISTS);
 	}
@@ -7269,11 +7463,12 @@ int library_playlist_rows(const char *name, library_playlist_row_t **rows_out) {
 
 struct library_playlist_writer {
 	sqlite3_stmt *stmt;
+	uint64_t session;
 	bool failed;
 	bool owns_transaction;
 };
 
-library_playlist_writer_t *library_playlist_write_begin(const char *name) {
+library_playlist_writer_t *library_playlist_write_begin(const char *name, uint64_t session) {
 	char quoted[PLAYLIST_TABLE_MAX];
 	if (!playlist_table(name, quoted, sizeof(quoted))) {
 		return NULL;
@@ -7287,11 +7482,13 @@ library_playlist_writer_t *library_playlist_write_begin(const char *name) {
 	snprintf(sql, sizeof(sql), "INSERT INTO %s(path,title,artist,seconds,present) VALUES(?,?,?,?,?)", quoted);
 
 	pthread_mutex_lock(&db_lock);
-	if (!db || !playlist_create_locked(quoted) || sqlite3_prepare_v2(db, sql, -1, &writer->stmt, NULL) != SQLITE_OK) {
+	if (!playlist_session_writable_locked(session) || !playlist_create_locked(quoted) ||
+		sqlite3_prepare_v2(db, sql, -1, &writer->stmt, NULL) != SQLITE_OK) {
 		pthread_mutex_unlock(&db_lock);
 		free(writer);
 		return NULL;
 	}
+	writer->session = session;
 	writer->owns_transaction = exec_quiet("BEGIN");
 	pthread_mutex_unlock(&db_lock);
 	return writer;
@@ -7302,6 +7499,11 @@ bool library_playlist_write_row(library_playlist_writer_t *writer, const library
 		return false;
 	}
 	pthread_mutex_lock(&db_lock);
+	if (!playlist_session_writable_locked(writer->session)) {
+		writer->failed = true;
+		pthread_mutex_unlock(&db_lock);
+		return false;
+	}
 	sqlite3_reset(writer->stmt);
 	sqlite3_bind_text(writer->stmt, 1, row->path, -1, SQLITE_TRANSIENT);
 	sqlite3_bind_text(writer->stmt, 2, row->title, -1, SQLITE_TRANSIENT);
@@ -7324,6 +7526,11 @@ bool library_playlist_write_end(library_playlist_writer_t *writer, bool keep) {
 	bool ok = keep && !writer->failed;
 	pthread_mutex_lock(&db_lock);
 	sqlite3_finalize(writer->stmt);
+	if (!playlist_session_writable_locked(writer->session)) {
+		pthread_mutex_unlock(&db_lock);
+		free(writer);
+		return false;
+	}
 	if (writer->owns_transaction) {
 		exec(ok ? "COMMIT" : "ROLLBACK");
 	} else if (!ok) {
@@ -7338,11 +7545,11 @@ bool library_playlist_write_end(library_playlist_writer_t *writer, bool keep) {
 	return ok;
 }
 
-bool library_playlist_append_all(const char *name, const library_playlist_row_t *rows, int count) {
+bool library_playlist_append_all(const char *name, const library_playlist_row_t *rows, int count, uint64_t session) {
 	if (!rows || count < 0) {
 		return false;
 	}
-	library_playlist_writer_t *writer = library_playlist_write_begin(name);
+	library_playlist_writer_t *writer = library_playlist_write_begin(name, session);
 	if (!writer) {
 		return false;
 	}
@@ -7466,7 +7673,7 @@ bool library_playlist_move(const char *name, int from, int to) {
 	return ok;
 }
 
-bool library_playlist_remove_path(const char *name, const char *path) {
+bool library_playlist_remove_path(const char *name, const char *path, uint64_t session) {
 	char quoted[PLAYLIST_TABLE_MAX];
 	if (!path || !path[0] || !playlist_table(name, quoted, sizeof(quoted))) {
 		return false;
@@ -7477,7 +7684,7 @@ bool library_playlist_remove_path(const char *name, const char *path) {
 
 	pthread_mutex_lock(&db_lock);
 	bool ok = false;
-	if (db && playlist_table_exists_locked(name)) {
+	if (playlist_session_writable_locked(session) && playlist_table_exists_locked(name)) {
 		sqlite3_stmt *stmt = NULL;
 		if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
 			sqlite3_bind_text(stmt, 1, path, -1, SQLITE_TRANSIENT);
@@ -7514,7 +7721,7 @@ bool library_playlist_contains(const char *name, const char *path) {
 	return found;
 }
 
-int library_playlist_remove_positions(const char *name, const int *positions, int count) {
+int library_playlist_remove_positions(const char *name, const int *positions, int count, uint64_t session) {
 	char quoted[PLAYLIST_TABLE_MAX];
 	if (!positions || count <= 0 || !playlist_table(name, quoted, sizeof(quoted))) {
 		return 0;
@@ -7535,7 +7742,7 @@ int library_playlist_remove_positions(const char *name, const int *positions, in
 
 	pthread_mutex_lock(&db_lock);
 	int removed = 0;
-	if (db && playlist_table_exists_locked(name)) {
+	if (playlist_session_writable_locked(session) && playlist_table_exists_locked(name)) {
 		int found = 0;
 		sqlite3_stmt *stmt = NULL;
 		if (sqlite3_prepare_v2(db, read_sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -7608,9 +7815,9 @@ bool library_playlists_migrated(void) {
 	return done;
 }
 
-void library_playlists_set_migrated(void) {
+void library_playlists_set_migrated(uint64_t session) {
 	pthread_mutex_lock(&db_lock);
-	if (db) {
+	if (playlist_session_writable_locked(session)) {
 		exec("INSERT OR REPLACE INTO PLAYLIST_MIGRATION(id,done) VALUES(0,1)");
 	}
 	pthread_mutex_unlock(&db_lock);
@@ -7723,7 +7930,7 @@ bool library_playback_state_load(char *path_out, size_t path_size, double *posit
 // the common case (the position moved) only touches the one state row.
 // ---------------------------------------------------------------------------
 
-void library_queue_save(const char *const *paths, int count, int current_index, bool custom) {
+void library_queue_save(const char *const *paths, int count, int current_index, bool custom, bool ordered) {
 	pthread_mutex_lock(&db_lock);
 	if (!db) {
 		pthread_mutex_unlock(&db_lock);
@@ -7754,11 +7961,12 @@ void library_queue_save(const char *const *paths, int count, int current_index, 
 
 	stmt = NULL;
 	if (sqlite3_prepare_v2(db,
-						   "INSERT OR REPLACE INTO PLAYBACK_QUEUE_STATE(id,pos,custom,updated_at)"
-						   " VALUES(0,?,?,strftime('%s','now'))",
+						   "INSERT OR REPLACE INTO PLAYBACK_QUEUE_STATE(id,pos,custom,ordered,updated_at)"
+						   " VALUES(0,?,?,?,strftime('%s','now'))",
 						   -1, &stmt, NULL) == SQLITE_OK) {
 		sqlite3_bind_int(stmt, 1, current_index);
 		sqlite3_bind_int(stmt, 2, custom ? 1 : 0);
+		sqlite3_bind_int(stmt, 3, ordered ? 1 : 0);
 		sqlite3_step(stmt);
 		sqlite3_finalize(stmt);
 	}
@@ -7822,7 +8030,7 @@ void library_queue_save_index(int current_index) {
 	pthread_mutex_unlock(&db_lock);
 }
 
-int library_queue_load(char ***paths_out, int *index_out, bool *custom_out) {
+int library_queue_load(char ***paths_out, int *index_out, bool *custom_out, bool *ordered_out) {
 	if (paths_out) {
 		*paths_out = NULL;
 	}
@@ -7831,6 +8039,9 @@ int library_queue_load(char ***paths_out, int *index_out, bool *custom_out) {
 	}
 	if (custom_out) {
 		*custom_out = false;
+	}
+	if (ordered_out) {
+		*ordered_out = false;
 	}
 
 	pthread_mutex_lock(&db_lock);
@@ -7875,14 +8086,16 @@ int library_queue_load(char ***paths_out, int *index_out, bool *custom_out) {
 	}
 
 	stmt = NULL;
-	if (sqlite3_prepare_v2(db, "SELECT pos, custom FROM PLAYBACK_QUEUE_STATE WHERE id=0", -1, &stmt, NULL) ==
-		SQLITE_OK) {
+	if (sqlite3_prepare_v2(db, "SELECT pos, custom, ordered FROM PLAYBACK_QUEUE_STATE WHERE id=0", -1, &stmt, NULL) == SQLITE_OK) {
 		if (sqlite3_step(stmt) == SQLITE_ROW) {
 			if (index_out) {
 				*index_out = sqlite3_column_int(stmt, 0);
 			}
 			if (custom_out) {
 				*custom_out = sqlite3_column_int(stmt, 1) != 0;
+			}
+			if (ordered_out) {
+				*ordered_out = sqlite3_column_int(stmt, 2) != 0;
 			}
 		}
 		sqlite3_finalize(stmt);
