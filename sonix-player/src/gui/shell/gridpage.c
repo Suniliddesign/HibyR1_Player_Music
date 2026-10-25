@@ -15,7 +15,7 @@
 #include "src/system/device/usb.h"
 
 #define GRID_GAP 14
-#define TILE_RADIUS 12 // Adwaita card radius
+#define TILE_RADIUS 20 // soft Material-style card corners
 
 static void unavailable_cb(lv_event_t *e) {
 	if (player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active()) {
@@ -106,14 +106,19 @@ static void add_tile(lv_obj_t *grid, const grid_entry_t *entry, int width, int h
 
 void gridpage_set_entries(lv_obj_t *grid, gui_config_t *cfg, const grid_entry_t *entries, int count, int columns,
 						  int rows, bool clear_corner_buttons) {
+	gridpage_set_entries_reserved(grid, cfg, entries, count, columns, rows, clear_corner_buttons, 0, 0);
+}
+
+void gridpage_set_entries_reserved(lv_obj_t *grid, gui_config_t *cfg, const grid_entry_t *entries, int count,
+								  int columns, int rows, bool clear_corner_buttons, int top_extra, int bottom_inset) {
 	if (!grid) {
 		return;
 	}
 	lv_obj_clean(grid);
 
-	int top = clear_corner_buttons ? settingsrow_content_top(cfg) : cfg->top_bar_height;
+	int top = (clear_corner_buttons ? settingsrow_content_top(cfg) : cfg->top_bar_height) + top_extra;
 	int usable_w = cfg->screen_width - (2 * cfg->padding);
-	int usable_h = (cfg->screen_height - top) - (2 * cfg->padding);
+	int usable_h = (cfg->screen_height - top - bottom_inset) - (2 * cfg->padding);
 
 	int tile_w = (usable_w - (columns - 1) * GRID_GAP) / columns;
 	int tile_h = (usable_h - (rows - 1) * GRID_GAP) / rows;
@@ -125,12 +130,17 @@ void gridpage_set_entries(lv_obj_t *grid, gui_config_t *cfg, const grid_entry_t 
 
 lv_obj_t *gridpage_build(lv_obj_t *screen, gui_config_t *cfg, const grid_entry_t *entries, int count, int columns,
 						 int rows, bool clear_corner_buttons) {
+	return gridpage_build_reserved(screen, cfg, entries, count, columns, rows, clear_corner_buttons, 0, 0);
+}
+
+lv_obj_t *gridpage_build_reserved(lv_obj_t *screen, gui_config_t *cfg, const grid_entry_t *entries, int count,
+								  int columns, int rows, bool clear_corner_buttons, int top_extra, int bottom_inset) {
 	lv_obj_add_style(screen, &theme_style_screen, 0);
 
-	int top = clear_corner_buttons ? settingsrow_content_top(cfg) : cfg->top_bar_height;
+	int top = (clear_corner_buttons ? settingsrow_content_top(cfg) : cfg->top_bar_height) + top_extra;
 
 	lv_obj_t *grid = lv_obj_create(screen);
-	lv_obj_set_size(grid, lv_pct(100), cfg->screen_height - top);
+	lv_obj_set_size(grid, lv_pct(100), cfg->screen_height - top - bottom_inset);
 	lv_obj_align(grid, LV_ALIGN_TOP_LEFT, 0, top);
 	lv_obj_set_style_bg_opa(grid, 0, 0);
 	lv_obj_set_style_border_width(grid, 0, 0);
@@ -146,7 +156,8 @@ lv_obj_t *gridpage_build(lv_obj_t *screen, gui_config_t *cfg, const grid_entry_t
 	// its row, giving that page a shape no other one has.
 	lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
 
-	gridpage_set_entries(grid, cfg, entries, count, columns, rows, clear_corner_buttons);
+	gridpage_set_entries_reserved(grid, cfg, entries, count, columns, rows, clear_corner_buttons, top_extra,
+								  bottom_inset);
 
 	// The player can be pulled in from any tiled page.
 	player_sheet_attach_drag(grid, true);

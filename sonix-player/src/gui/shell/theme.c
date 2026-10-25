@@ -18,23 +18,22 @@ lv_style_t theme_style_switch_checked; // switch indicator, on state
 lv_style_t theme_style_accent_bg;	   // anything that must follow the accent
 lv_style_t theme_style_slider_track;   // a slider's unfilled part
 
-// GNOME Adwaita (libadwaita) colours, dark variant: window #242424, cards
-// #303030 (white at 8%% over the window), accent blue #3584e4. Secondary text
-// is white at 55%%, flattened against the card colour.
+// A calm, Spotify-inspired dark palette: near-black pages, charcoal surfaces,
+// and a restrained green accent. The complete accent preset picker remains
+// available in Appearance.
 static theme_palette_t palette_dark = {
-	.screen_bg = LV_COLOR_MAKE(36, 36, 36),
-	.surface = LV_COLOR_MAKE(48, 48, 48),
-	.surface_pressed = LV_COLOR_MAKE(64, 64, 64),
-	.panel = LV_COLOR_MAKE(30, 30, 30),
-	.cover_bg = LV_COLOR_MAKE(30, 30, 30),
+	.screen_bg = LV_COLOR_MAKE(18, 18, 18),
+	.surface = LV_COLOR_MAKE(36, 36, 36),
+	.surface_pressed = LV_COLOR_MAKE(54, 54, 54),
+	.panel = LV_COLOR_MAKE(24, 24, 24),
+	.cover_bg = LV_COLOR_MAKE(24, 24, 24),
 	.text_primary = LV_COLOR_MAKE(255, 255, 255),
-	.text_secondary = LV_COLOR_MAKE(160, 160, 160),
-	.accent = LV_COLOR_MAKE(53, 132, 228),
+	.text_secondary = LV_COLOR_MAKE(179, 179, 179),
+	.accent = LV_COLOR_MAKE(30, 215, 96),
 	.dark = true,
 };
 
-// Adwaita light: window #fafafa, cards white, pressed = black at 8%%, text
-// black at 80%%. The accent is the same #3584e4 in both variants.
+// A neutral light counterpart; it uses the same configurable accent as dark.
 static theme_palette_t palette_light = {
 	// The window is pushed further from white than stock Adwaita's #fafafa:
 	// on this panel white cards on a #fafafa window are indistinguishable, so
@@ -66,13 +65,13 @@ static theme_palette_t tinted;
 
 static theme_palette_t *active = &palette_dark;
 
-// The accent presets, Adwaita's named accents, ordered as requested: blue
-// (the default), then warm to cool -- orange, yellow, green, purple, pink.
+// Accent presets, with green as the first-boot choice and the other saved
+// options kept available in Appearance.
 static const lv_color_t ACCENT_COLORS[THEME_ACCENT_COUNT] = {
-	LV_COLOR_MAKE(53, 132, 228), // blue (#3584e4, the default)
+	LV_COLOR_MAKE(53, 132, 228), // blue
 	LV_COLOR_MAKE(255, 120, 0),  // orange (#ff7800)
 	LV_COLOR_MAKE(229, 165, 10), // yellow (#e5a50a)
-	LV_COLOR_MAKE(46, 194, 126), // green (#2ec27e)
+	LV_COLOR_MAKE(30, 215, 96),  // green (#1ed760)
 	LV_COLOR_MAKE(145, 65, 172), // purple (#9141ac)
 	LV_COLOR_MAKE(213, 97, 153), // pink (#d56199)
 };
@@ -226,7 +225,7 @@ void theme_init(void) {
 	dark_selected = config_get_bool("ui", "dark_theme", true);
 
 	// The accent as it was left; both palettes carry the same one.
-	accent_index = (int)config_get_int("ui", "accent", 0);
+	accent_index = (int)config_get_int("ui", "accent", 3);
 	if (accent_index < 0 || accent_index >= THEME_ACCENT_COUNT) {
 		accent_index = 0;
 	}

@@ -9,6 +9,7 @@
 #include "src/gui/library/libraryscan.h"
 #include "src/gui/nowplaying/coverflow.h"
 #include "src/gui/shell/gridpage.h"
+#include "src/gui/shell/bottomnav.h"
 #include "src/gui/shell/gui.h"
 #include "src/gui/shell/icons.h"
 #include "src/gui/library/medialist.h"
@@ -250,7 +251,7 @@ void music_rebuild_tiles(void) {
 	}
 	// Tiles at the size of the other sections' six: past the third row the
 	// page scrolls.
-	gridpage_set_entries(tile_grid, grid_cfg, entries, in_use_n, 2, 3, true);
+	gridpage_set_entries_reserved(tile_grid, grid_cfg, entries, in_use_n, 2, 3, true, 0, BOTTOMNAV_HEIGHT);
 	lv_obj_scroll_to_y(tile_grid, 0, LV_ANIM_OFF);
 }
 
@@ -355,14 +356,16 @@ void music_init(gui_config_t *cfg) {
 	// Built empty and filled from the saved order. With more tiles than the
 	// three rows other sections have, the page scrolls to the rest.
 	grid_cfg = cfg;
-	lv_obj_t *grid = gridpage_build(music_screen, cfg, NULL, 0, 2, 3, true);
+	lv_obj_t *grid = gridpage_build_reserved(music_screen, grid_cfg, NULL, 0, 2, 3, true, 0, BOTTOMNAV_HEIGHT);
 	tile_grid = grid;
 	gridpage_set_scrolling(grid);
 	music_rebuild_tiles();
 
 	// The pull from the bottom edge that opens the album carousel. It goes on
 	// the grid because that is where a tile's press stops bubbling.
-	coverflow_attach_edge(grid, cfg);
+	// The carousel pull band moves with the usable area and remains above the
+	// navigation bar, so the existing upward swipe is still available.
+	coverflow_attach_edge_reserved(grid, grid_cfg, BOTTOMNAV_HEIGHT);
 
 	// Two buttons in the corner, so the heading has to be told to clear them.
 	settingsrow_title_corner_slots(settingsrow_title(music_screen, cfg, "music"), cfg, 2);
@@ -374,6 +377,7 @@ void music_init(gui_config_t *cfg) {
 	lv_obj_add_event_cb(search_btn, search_cb, LV_EVENT_CLICKED, NULL);
 
 	empty_panel = gridpage_empty_panel(music_screen, cfg, &icon_music_note, "music_no_database", scan_cb);
+	lv_obj_set_height(empty_panel, cfg->screen_height - settingsrow_content_top(cfg) - BOTTOMNAV_HEIGHT);
 
 	// Over the tiles but never in the way: a press goes through it to the tile,
 	// or to the pull from the bottom edge. Floating, because on its way down it
@@ -383,7 +387,7 @@ void music_init(gui_config_t *cfg) {
 	more_hint = lv_image_create(music_screen);
 	lv_image_set_src(more_hint, &icon_chevron_down);
 	lv_obj_add_style(more_hint, &theme_style_icon, 0);
-	lv_obj_align(more_hint, LV_ALIGN_BOTTOM_MID, 0, -MORE_HINT_TRAVEL / 2);
+	lv_obj_align(more_hint, LV_ALIGN_BOTTOM_MID, 0, -BOTTOMNAV_HEIGHT - MORE_HINT_TRAVEL / 2);
 	lv_obj_set_clickable(more_hint, false);
 	lv_obj_set_floating(more_hint, true);
 	lv_obj_set_hidden(more_hint, true);

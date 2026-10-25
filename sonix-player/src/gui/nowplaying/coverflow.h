@@ -58,6 +58,7 @@ void coverflow_set_enabled(bool on);
 // and an arrow drawn over the top record is an arrow in the way of the one
 // thing the page is for.
 void coverflow_attach_edge(lv_obj_t *grid, gui_config_t *cfg);
+void coverflow_attach_edge_reserved(lv_obj_t *grid, gui_config_t *cfg, int bottom_inset);
 
 // True while that pull is being followed, and for one tick afterwards. The
 // gesture starts on a tile, and the tile still gets its CLICKED when the finger

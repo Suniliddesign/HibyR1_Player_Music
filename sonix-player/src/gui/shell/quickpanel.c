@@ -52,12 +52,10 @@
 #define PANEL_ANIM_MS 180
 #define PANEL_POLL_MS 700
 
-// Four round quick controls to a line. Four at 88 px plus their gaps is 394,
-// against the roughly 400 px the card leaves inside its padding, so a fifth
-// does not fit however tight the gap gets: the extra controls wrap onto a
-// second line rather than shrinking.
-#define CIRCLE_BUTTON_SIZE 88
-#define CIRCLE_BUTTON_GAP 14
+// Four smaller quick controls to a line. The compact controls leave the
+// now-playing card more room for the current track and keep a 60 px touch area.
+#define CIRCLE_BUTTON_SIZE 60
+#define CIRCLE_BUTTON_GAP 29
 #define QP_BUTTONS_PER_LINE 4
 
 // How the sheet divides the screen up: a strip for the close hint at the
@@ -205,7 +203,8 @@ static lv_obj_t *extra_row;	   // the rest, inside that window
 static lv_obj_t *bright_row;	   // moved down by the stretch
 static lv_obj_t *expand_handle; // the line under the slider, and a tap target
 static lv_obj_t *expand_pill;
-static int card_h_rest;		   // both cards' height with nothing past the eighth
+static int card_h_rest;		   // now-playing card's height before controls are expanded
+static int controls_h_rest;	   // controls card's height before an expansion handle is added
 static int card_top;		   // the controls card's top, inside the sheet
 static int card_h_base;		   // the controls card's height at rest, handle room included
 static int expand_full;		   // how far the card stretches; 0 when nothing is past the eighth
@@ -1219,7 +1218,7 @@ static void order_apply(void) {
 	// stay as they always were.
 	if (controls_card) {
 		int room = expand_full ? HANDLE_ROOM : 0;
-		card_h_base = card_h_rest + room;
+		card_h_base = controls_h_rest + room;
 		lv_obj_set_y(np_card, card_top + card_h_base + CARD_GAP);
 		lv_obj_set_height(np_card, card_h_rest - room);
 		lv_obj_set_hidden(expand_handle, expand_full == 0);
@@ -1946,15 +1945,19 @@ void quickpanel_init(gui_config_t *cfg) {
 		top_inset = 0; // a bar shorter than the padding leaves nothing to clear
 	}
 	int card_w = cfg->screen_width - 2 * cfg->padding;
-	int card_h = (content_h - top_inset - HINT_STRIP_H - CARD_GAP) / 2;
-	if (card_h < 160) {
-		card_h = 160; // floor for panels shorter than any shipped screen
+	int cards_h = content_h - top_inset - HINT_STRIP_H - CARD_GAP;
+	int controls_h = cards_h * 2 / 5;
+	int now_playing_h = cards_h - controls_h;
+	if (controls_h < 200) {
+		controls_h = 200; // leave enough height for two compact quick-control rows
+		now_playing_h = cards_h - controls_h;
 	}
 
 	// --- First card: the quick controls. ---
-	controls_card = make_card(panel, card_w, card_h, top_inset);
-	card_h_rest = card_h;
-	card_h_base = card_h;
+	controls_card = make_card(panel, card_w, controls_h, top_inset);
+	controls_h_rest = controls_h;
+	card_h_rest = now_playing_h;
+	card_h_base = controls_h;
 	card_top = top_inset;
 	lv_obj_set_flex_flow(controls_card, LV_FLEX_FLOW_COLUMN);
 	// Brightness under the buttons; the buttons take the height above it and
@@ -1963,7 +1966,7 @@ void quickpanel_init(gui_config_t *cfg) {
 	// card, so the slider stays where it is while the card stretches.
 	lv_obj_set_flex_align(controls_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 	lv_obj_set_style_pad_gap(controls_card, CARD_ROW_GAP, 0);
-	int row_h = card_h - 2 * CARD_PADDING - BRIGHT_ROW_H - CARD_ROW_GAP;
+	int row_h = controls_h - 2 * CARD_PADDING - BRIGHT_ROW_H - CARD_ROW_GAP;
 
 	lv_obj_t *row = lv_obj_create(controls_card);
 	quick_row = row;
@@ -2162,7 +2165,7 @@ void quickpanel_init(gui_config_t *cfg) {
 	lv_obj_set_clickable(expand_pill, false);
 
 	// --- Second card: what is playing, and its transport. ---
-	np_card = make_card(panel, card_w, card_h, top_inset + card_h + CARD_GAP);
+	np_card = make_card(panel, card_w, now_playing_h, top_inset + controls_h + CARD_GAP);
 	lv_obj_set_flex_flow(np_card, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(np_card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 	lv_obj_set_style_pad_gap(np_card, 6, 0);

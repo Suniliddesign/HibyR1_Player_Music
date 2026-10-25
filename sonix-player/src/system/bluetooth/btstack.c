@@ -954,10 +954,10 @@ bool btstack_discovery(bool on) {
 	if (dbus_call_send(c, CALL_MS, err, sizeof(err))) {
 		return true;
 	}
-	// Already discovering, or already stopped. Both mean the caller has what it
-	// asked for, and treating them as failures is how a scan button that works
-	// reports an error.
-	if (strstr(err, "InProgress") || strstr(err, "NotAuthorized") || strstr(err, "Failed")) {
+	// Only the matching idempotent response means the requested state already
+	// holds. NotAuthorized and Failed are real failures; hiding them made an
+	// empty scan look as if discovery had started normally.
+	if ((on && strstr(err, "InProgress")) || (!on && strstr(err, "NotDiscovering"))) {
 		fprintf(stderr, "btstack: discovery %s: %s (already in the wanted state)\n", on ? "on" : "off", err);
 		return true;
 	}

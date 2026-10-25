@@ -10,6 +10,7 @@
 #include "src/gui/nowplaying/coverloader.h"
 #include "src/gui/fonts/fonts.h"
 #include "src/gui/shell/icons.h"
+#include "src/gui/shell/bottomnav.h"
 #include "src/gui/shell/keyboard.h"
 #include "src/gui/library/medialist.h"
 #include "src/gui/library/playlistpage.h"
@@ -763,7 +764,7 @@ static void kb_search_cb(lv_event_t *e) {
 static void layout_results(void) {
 	bool kb_visible = keyboard_is_visible(keyboard);
 	int top = results_top + SEARCH_PILLS_H + SEARCH_PILLS_GAP;
-	int height = screen_h - top - (kb_visible ? keyboard_height : 0);
+	int height = screen_h - top - (kb_visible ? keyboard_height : BOTTOMNAV_HEIGHT);
 	if (height < 60) {
 		height = 60;
 	}
@@ -773,6 +774,7 @@ static void layout_results(void) {
 
 static void search_keyboard_show(bool visible) {
 	keyboard_set_visible(keyboard, visible);
+	bottomnav_search_keyboard(visible);
 	layout_results();
 }
 

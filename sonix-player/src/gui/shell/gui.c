@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "src/gui/library/browser.h"
+#include "src/gui/shell/bottomnav.h"
 #include "src/gui/nowplaying/coverflow.h"
 #include "src/gui/settings/ccsettings.h"
 #include "src/gui/nowplaying/chapters.h"
@@ -728,6 +729,7 @@ void gui_init(gui_config_t *cfg) {
 	chapters_init(cfg);
 	lyricsearch_init(cfg);
 	trackmenu_init(cfg);
+	bottomnav_init(cfg);
 
 	// The leftward swipe that pulls the player in works on the browsing pages
 	// -- menu, library lists, file browser -- but NOT on the settings pages

@@ -1900,10 +1900,15 @@ static void edge_drag_cb(lv_event_t *e) {
 }
 
 void coverflow_attach_edge(lv_obj_t *grid, gui_config_t *cfg) {
+	coverflow_attach_edge_reserved(grid, cfg, 0);
+}
+
+void coverflow_attach_edge_reserved(lv_obj_t *grid, gui_config_t *cfg, int bottom_inset) {
 	if (!grid) {
 		return;
 	}
-	void *band = (void *)(uintptr_t)(cfg->screen_height - CF_EDGE_H);
+	int band_top = (int)cfg->screen_height - bottom_inset - CF_EDGE_H;
+	void *band = (void *)(uintptr_t)band_top;
 	lv_obj_add_event_cb(grid, edge_drag_cb, LV_EVENT_PRESSED, band);
 	lv_obj_add_event_cb(grid, edge_drag_cb, LV_EVENT_PRESSING, band);
 	lv_obj_add_event_cb(grid, edge_drag_cb, LV_EVENT_RELEASED, band);

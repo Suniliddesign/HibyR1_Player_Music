@@ -1684,10 +1684,9 @@ static void apply_renames(void) {
 	}
 }
 
-// How long a discovery runs when the user presses search. Ten seconds, as the
-// firmware's `bt-adapter -d` does, except that the list fills as devices arrive
-// rather than all at once at the end.
-#define SCAN_SECONDS 10
+// Give nearby headphones time to advertise and answer name requests. The scan
+// button can stop this early; leaving the page also cancels it.
+#define SCAN_SECONDS 30
 
 static void do_scan(void) {
 	if (!btstack_discovery(true)) {
@@ -1697,6 +1696,7 @@ static void do_scan(void) {
 		fprintf(stderr, "bluetooth: the search could not be started; bluez did not take the discovery\n");
 		pthread_mutex_lock(&lock);
 		g_scanning = false;
+		g_serial++;
 		pthread_mutex_unlock(&lock);
 		return;
 	}
@@ -1718,6 +1718,7 @@ static void do_scan(void) {
 	btstack_discovery(false);
 	pthread_mutex_lock(&lock);
 	g_scanning = false;
+	g_serial++;
 	pthread_mutex_unlock(&lock);
 	refresh_devices();
 
@@ -3381,6 +3382,17 @@ void bluetooth_scan_start(void) {
 }
 
 void bluetooth_scan_stop(void) {
+	// do_scan() owns the worker while discovery is running, so a queued
+	// JOB_SCAN_STOP cannot be handled until that scan has already timed out.
+	// Clear the shared flag here so the running scan sees the cancellation on
+	// its next poll and stops the radio immediately.
+	pthread_mutex_lock(&lock);
+	bool was_scanning = g_scanning;
+	g_scanning = false;
+	if (was_scanning) {
+		g_serial++;
+	}
+	pthread_mutex_unlock(&lock);
 	job_t job = {.type = JOB_SCAN_STOP};
 	post_job(&job);
 }

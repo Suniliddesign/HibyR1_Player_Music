@@ -41,7 +41,7 @@
 // notches read as a dotted line, not a scale. Finer sliders (Soundfield width,
 // 0.00 to 2.00 in steps of 0.05) go without.
 #define SLIDER_TICK_MAX_STEPS 16
-#define ROW_RADIUS 12 // Adwaita boxed-list corner radius
+#define ROW_RADIUS 16 // soft Material-style boxed-list corners
 #define ROW_GAP 8
 
 // Every page heading, row name and card name goes through this file, so the

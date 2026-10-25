@@ -37,11 +37,15 @@ void gridpage_set_tile(lv_obj_t *grid, int index, const lv_image_dsc_t *icon, co
 
 lv_obj_t *gridpage_build(lv_obj_t *screen, gui_config_t *cfg, const grid_entry_t *entries, int count, int columns, int rows,
 					bool clear_corner_buttons);
+lv_obj_t *gridpage_build_reserved(lv_obj_t *screen, gui_config_t *cfg, const grid_entry_t *entries, int count,
+					int columns, int rows, bool clear_corner_buttons, int top_extra, int bottom_inset);
 
 // Puts a different set of tiles on a grid gridpage_build() made, with the same
 // arguments as it took: for a page whose tiles the user arranges.
 void gridpage_set_entries(lv_obj_t *grid, gui_config_t *cfg, const grid_entry_t *entries, int count, int columns,
 						  int rows, bool clear_corner_buttons);
+void gridpage_set_entries_reserved(lv_obj_t *grid, gui_config_t *cfg, const grid_entry_t *entries, int count,
+								  int columns, int rows, bool clear_corner_buttons, int top_extra, int bottom_inset);
 
 // Lets a grid built with more entries than `columns` x `rows` scroll to the
 // rest, the tiles keeping the size that grid gives them.
