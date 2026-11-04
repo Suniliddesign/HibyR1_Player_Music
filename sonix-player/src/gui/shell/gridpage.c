@@ -95,7 +95,7 @@ static void add_tile(lv_obj_t *grid, const grid_entry_t *entry, int width, int h
 
 	lv_obj_t *icon = lv_image_create(tile);
 	lv_image_set_src(icon, entry->icon);
-	lv_obj_set_size(icon, 48, 48);
+	// Keep the descriptor's intrinsic size; forcing a smaller object clips the glyph.
 	lv_obj_set_style_image_recolor(icon, lv_color_white(), 0);
 	lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
 	lv_obj_align(icon, LV_ALIGN_TOP_RIGHT, -12, 12);
