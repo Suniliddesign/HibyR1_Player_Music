@@ -15,7 +15,19 @@
 #include "src/system/device/usb.h"
 
 #define GRID_GAP 14
-#define TILE_RADIUS 20 // soft Material-style card corners
+#define TILE_RADIUS 2 // flat, almost-square Lumia tiles
+
+// Windows Phone-inspired Metro tile colours. Reused across the Home and Music grids.
+static const lv_color_t METRO_TILE_COLORS[] = {
+	LV_COLOR_MAKE(0, 171, 169),   // teal
+	LV_COLOR_MAKE(27, 161, 226),  // cyan
+	LV_COLOR_MAKE(162, 0, 37),    // crimson
+	LV_COLOR_MAKE(170, 0, 255),  // violet
+	LV_COLOR_MAKE(240, 163, 10), // amber
+	LV_COLOR_MAKE(96, 169, 23),  // green
+	LV_COLOR_MAKE(164, 196, 0),  // lime
+	LV_COLOR_MAKE(250, 104, 0),  // orange
+};
 
 static void unavailable_cb(lv_event_t *e) {
 	if (player_sheet_drag_active() || switcher_back_drag_active() || coverflow_drag_active()) {
@@ -60,11 +72,13 @@ void gridpage_set_tile(lv_obj_t *grid, int index, const lv_image_dsc_t *icon, co
 	}
 }
 
-static void add_tile(lv_obj_t *grid, const grid_entry_t *entry, int width, int height) {
+static void add_tile(lv_obj_t *grid, const grid_entry_t *entry, int width, int height, int index) {
 	lv_obj_t *tile = lv_btn_create(grid);
 	lv_obj_set_size(tile, width, height);
 	lv_obj_add_style(tile, &theme_style_card, 0);
 	lv_obj_add_style(tile, &theme_style_card_pressed, LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(tile, METRO_TILE_COLORS[index % (sizeof(METRO_TILE_COLORS) / sizeof(METRO_TILE_COLORS[0]))], 0);
+	lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
 	lv_obj_set_style_radius(tile, TILE_RADIUS, 0);
 	lv_obj_set_style_shadow_width(tile, 0, 0);
 	lv_obj_set_style_pad_all(tile, 8, 0);
@@ -89,6 +103,7 @@ static void add_tile(lv_obj_t *grid, const grid_entry_t *entry, int width, int h
 	lv_obj_t *label = lv_label_create(tile);
 	lv_label_set_text(label, tr(entry->label));
 	lv_obj_add_style(label, &theme_style_text, 0);
+	lv_obj_set_style_text_color(label, lv_color_white(), 0);
 	lv_obj_set_style_text_font(label, &font_ui_24_bold, 0);
 	lv_obj_set_width(label, lv_pct(100));
 	lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
@@ -124,7 +139,7 @@ void gridpage_set_entries_reserved(lv_obj_t *grid, gui_config_t *cfg, const grid
 	int tile_h = (usable_h - (rows - 1) * GRID_GAP) / rows;
 
 	for (int i = 0; i < count; i++) {
-		add_tile(grid, &entries[i], tile_w, tile_h);
+		add_tile(grid, &entries[i], tile_w, tile_h, i);
 	}
 }
 
