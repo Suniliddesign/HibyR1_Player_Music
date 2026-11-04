@@ -593,6 +593,12 @@ static void vlimit_refresh(void) {
 		lv_obj_remove_state(vlimit_switch, LV_STATE_CHECKED);
 	}
 	for (int i = 0; i < VLIMIT_OUTPUT_COUNT; i++) {
+		// The host simulator can fail to allocate an LVGL child when its object
+		// pool is exhausted. A partially built settings page must remain safe
+		// to initialise rather than passing a missing widget to LVGL.
+		if (!vlimit_values[i] || !vlimit_sliders[i] || !vlimit_cards[i]) {
+			continue;
+		}
 		int limit = volume_limit(VLIMIT_OUTPUTS[i]);
 		lv_label_set_text_fmt(vlimit_values[i], "%d", limit);
 		lv_slider_set_value(vlimit_sliders[i], limit - VOLUME_LIMIT_MIN, LV_ANIM_OFF);
