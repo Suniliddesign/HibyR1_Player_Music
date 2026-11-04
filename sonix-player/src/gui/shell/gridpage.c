@@ -14,8 +14,8 @@
 #include "src/system/core/lang.h"
 #include "src/system/device/usb.h"
 
-#define GRID_GAP 14
-#define TILE_RADIUS 2 // flat, almost-square Lumia tiles
+#define GRID_GAP 8
+#define TILE_RADIUS 0 // flat square Windows Phone-style tiles
 
 // Windows Phone-inspired Metro tile colours. Reused across the Home and Music grids.
 static const lv_color_t METRO_TILE_COLORS[] = {
@@ -87,26 +87,30 @@ static void add_tile(lv_obj_t *grid, const grid_entry_t *entry, int width, int h
 	// page has to be draggable, not just the gaps between the tiles.
 	lv_obj_set_event_bubble(tile, true);
 
-	lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
-	lv_obj_set_flex_align(tile, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-	lv_obj_set_style_pad_gap(tile, 8, 0);
+	// Metro tiles use fixed positions instead of a centered icon-and-caption
+	// stack: the glyph sits in the upper-right and the name anchors the lower-left.
+	lv_obj_set_layout(tile, LV_LAYOUT_NONE);
+	lv_obj_set_style_pad_all(tile, 0, 0);
 	lv_obj_set_scrollable(tile, false);
 
-	// The tile artwork keeps its own colours, so unlike the interface glyphs it
-	// is not run through the theme's recolour.
 	lv_obj_t *icon = lv_image_create(tile);
 	lv_image_set_src(icon, entry->icon);
+	lv_obj_set_size(icon, 48, 48);
+	lv_obj_set_style_image_recolor(icon, lv_color_white(), 0);
+	lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
+	lv_obj_align(icon, LV_ALIGN_TOP_RIGHT, -12, 12);
 
-	// The caption wraps rather than running out of the tile: a translated label
-	// such as "Album-Interpreten" does not fit on one line. Centred, because a
-	// tile is read as a block under its picture.
+	// Keep translated names inside the tile and left-aligned like Windows Phone
+	// captions. Long names wrap to two lines rather than crowding the icon.
 	lv_obj_t *label = lv_label_create(tile);
 	lv_label_set_text(label, tr(entry->label));
+	lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
 	lv_obj_add_style(label, &theme_style_text, 0);
 	lv_obj_set_style_text_color(label, lv_color_white(), 0);
-	lv_obj_set_style_text_font(label, &font_ui_24_bold, 0);
-	lv_obj_set_width(label, lv_pct(100));
-	lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+	lv_obj_set_style_text_font(label, &font_ui_24, 0);
+	lv_obj_set_width(label, lv_pct(90));
+	lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, 0);
+	lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, 8, -10);
 
 	if (entry->target) {
 		lv_obj_add_event_cb(tile, switch_screen_cb, LV_EVENT_CLICKED, *entry->target);
