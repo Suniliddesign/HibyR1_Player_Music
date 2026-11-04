@@ -18,18 +18,17 @@ lv_style_t theme_style_switch_checked; // switch indicator, on state
 lv_style_t theme_style_accent_bg;	   // anything that must follow the accent
 lv_style_t theme_style_slider_track;   // a slider's unfilled part
 
-// A calm, Spotify-inspired dark palette: near-black pages, charcoal surfaces,
-// and a restrained green accent. The complete accent preset picker remains
-// available in Appearance.
+// Lumia-inspired dark palette: true black pages, flat charcoal controls,
+// white typography and the classic Windows Phone cyan accent.
 static theme_palette_t palette_dark = {
-	.screen_bg = LV_COLOR_MAKE(18, 18, 18),
-	.surface = LV_COLOR_MAKE(36, 36, 36),
-	.surface_pressed = LV_COLOR_MAKE(54, 54, 54),
-	.panel = LV_COLOR_MAKE(24, 24, 24),
-	.cover_bg = LV_COLOR_MAKE(24, 24, 24),
+	.screen_bg = LV_COLOR_MAKE(0, 0, 0),
+	.surface = LV_COLOR_MAKE(20, 20, 20),
+	.surface_pressed = LV_COLOR_MAKE(38, 38, 38),
+	.panel = LV_COLOR_MAKE(0, 0, 0),
+	.cover_bg = LV_COLOR_MAKE(0, 0, 0),
 	.text_primary = LV_COLOR_MAKE(255, 255, 255),
 	.text_secondary = LV_COLOR_MAKE(179, 179, 179),
-	.accent = LV_COLOR_MAKE(30, 215, 96),
+	.accent = LV_COLOR_MAKE(0, 171, 169),
 	.dark = true,
 };
 
@@ -68,7 +67,7 @@ static theme_palette_t *active = &palette_dark;
 // Accent presets, with green as the first-boot choice and the other saved
 // options kept available in Appearance.
 static const lv_color_t ACCENT_COLORS[THEME_ACCENT_COUNT] = {
-	LV_COLOR_MAKE(53, 132, 228), // blue
+	LV_COLOR_MAKE(0, 171, 169),   // Lumia cyan
 	LV_COLOR_MAKE(255, 120, 0),  // orange (#ff7800)
 	LV_COLOR_MAKE(229, 165, 10), // yellow (#e5a50a)
 	LV_COLOR_MAKE(30, 215, 96),  // green (#1ed760)
@@ -225,7 +224,7 @@ void theme_init(void) {
 	dark_selected = config_get_bool("ui", "dark_theme", true);
 
 	// The accent as it was left; both palettes carry the same one.
-	accent_index = (int)config_get_int("ui", "accent", 3);
+	accent_index = (int)config_get_int("ui", "accent", 0);
 	if (accent_index < 0 || accent_index >= THEME_ACCENT_COUNT) {
 		accent_index = 0;
 	}
