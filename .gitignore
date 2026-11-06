@@ -39,3 +39,17 @@ sonix-packer/sonix_player
 sonix-packer/r3proii_original.upt
 sonix-packer/r1_original.upt
 sonix-packer/sonix_launch
+
+# Local simulator resources, settings and music.
+sonix-player/usr/
+test-music/
+
+# Compiler/linker scratch files left behind by interrupted host builds.
+sonix-player/cc*.s
+sonix-player/cc*.res
+sonix-player/cc*.cdtor.c
+sonix-player/cc*.cdtor.o
+sonix-player/.sonix_player_host.*
+sonix-packer/kernel/.xImage-*
+sonix-player/simulator-config.ini
+sonix-player/src/gui/shell/.icons.c.*

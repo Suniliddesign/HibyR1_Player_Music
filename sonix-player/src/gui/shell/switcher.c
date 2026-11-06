@@ -1,4 +1,5 @@
 #include "switcher.h"
+#include "lumia.h"
 
 #include <stdio.h>
 
@@ -486,7 +487,7 @@ static lv_obj_t *chevron_hidden_on;
 // back to, the scan pages exit through their own buttons, and a page showing
 // a dialog with a close button already has its way out.
 static bool page_has_no_chevron(lv_obj_t *screen) {
-	return screen == main_menu_screen || screen == libraryscan_screen || screen == audiobookscan_screen ||
+	return lumia_owns_navigation(screen) || screen == main_menu_screen || screen == libraryscan_screen || screen == audiobookscan_screen ||
 		   (screen && screen == chevron_hidden_on);
 }
 

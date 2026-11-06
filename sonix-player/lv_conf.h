@@ -1,6 +1,12 @@
 #ifndef LV_CONF_H
 #define LV_CONF_H
 
+/* Keep SDL captures and software/WSLg backbuffers complete after redraws.
+ * The device retains its existing direct framebuffer rendering mode. */
+#ifdef HOST_BUILD
+#define LV_SDL_RENDER_MODE LV_DISPLAY_RENDER_MODE_FULL
+#endif
+
 /* Defining this at all tells lv_conf_internal.h to skip this file, and it
  * tests for the name rather than the value. Harmless here only because
  * lv_conf_internal.h runs its test before including this file. */

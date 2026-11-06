@@ -44,7 +44,7 @@ lv_obj_t *bottomnav_create(lv_obj_t *screen, gui_config_t *cfg, int selected) {
 		return NULL;
 	}
 	const destination_t destinations[] = {
-		{"Home", &icon_music_note, main_menu_screen},
+		{"Home", &icon_music2, main_menu_screen},
 		{"Search", &icon_search, search_screen},
 		{"Your Library", &icon_list_music, music_screen},
 	};
@@ -115,7 +115,7 @@ void bottomnav_init(gui_config_t *cfg) {
 	if (!cfg) {
 		return;
 	}
-	bottomnav_create(main_menu_screen, cfg, 0);
+	/* Lumia Start owns its navigation and uses the whole canvas. */
 	search_bar = bottomnav_create(search_screen, cfg, 1);
 	bottomnav_create(music_screen, cfg, 2);
 	bottomnav_set_visible(search_bar, false);

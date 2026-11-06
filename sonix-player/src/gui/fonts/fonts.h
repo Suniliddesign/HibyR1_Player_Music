@@ -48,6 +48,7 @@ extern lv_font_t font_ui_24_bold;
 extern lv_font_t font_ui_26;
 extern lv_font_t font_ui_28;
 extern lv_font_t font_ui_32;
+extern lv_font_t font_ui_48; // Lumia hub headings
 // The A and B letters on the Gearboy buttons, nothing else: on a 110 pixel
 // circle the regular weight is lost.
 extern lv_font_t font_ui_36_bold;

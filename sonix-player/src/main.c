@@ -2014,13 +2014,14 @@ int main(int argc, char **argv) {
 	// taking over that job, which is what manage_mount does; the player still
 	// stays out of the way if it finds the card already mounted.
 	storage_config_t storage_cfg = {
-		// Both NULL: the player probes the block devices and the mount-point
-		// names the stock firmware uses and reports what it found in the log.
+		// The device probes the stock mount points. The host uses the directory
+		// selected by SONIX_SD_ROOT so scanning and databases share one root.
 		.device = NULL,
-		.mount_point = NULL,
 #ifdef HOST_BUILD
+		.mount_point = music_path,
 		.manage_mount = false, // never touch the developer's own filesystem
 #else
+		.mount_point = NULL,
 		.manage_mount = true,
 #endif
 	};
